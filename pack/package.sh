@@ -12,13 +12,11 @@ cd pack
 
 
 #windows
-mkdir dist
-cat ./win/love.exe enbody.love > dist/enbody.exe
-cp ./win/*.dll dist
-cp ./win/license.txt dist/license_love2d.txt
-cp ../readme.md dist
-cp ../license.txt dist
-cd dist
-zip -r ../enbody-win.zip .
-cd ..
-rm -rf dist
+mkdir enbody-win
+cat ./win/love.exe enbody.love > enbody-win/enbody.exe
+cp ./win/*.dll enbody-win
+cp ./win/license.txt enbody-win/license_love2d.txt
+cp ../readme.md enbody-win
+cp ../license.txt enbody-win
+zip -r enbody-win.zip enbody-win
+rm -rf enbody-win
