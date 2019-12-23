@@ -1,6 +1,6 @@
 # Enbody
 
-Enbody is a real-time multi-function n-body sim on the gpu in 500-odd lines of lua and glsl, made with [love](http://love2d.org).
+Enbody is a real-time multi-function n-body sim on the gpu in under 600 lines of lua and glsl, made with [love](http://love2d.org).
 
 It features multiple different attractor functions to generate lots of different visually interesting animations.
 
