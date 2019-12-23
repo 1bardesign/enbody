@@ -14,6 +14,8 @@ local steps_per_render = 1
 local sampling_percent = 1.0
 --visual zoom
 local zoom = 1
+--cam position
+local cx, cy = 0, 0
 
 --format for simulation configurations
 local sim_template = {
@@ -93,7 +95,7 @@ local sim_configs = {
 	cosines = {
 		gen = "sparse",
 		force_scale = 0.05,
-		force_distance = 30.0,
+		force_distance = 25.0,
 		force_term = "vec2 f = dir * m2 * -cos(r);",
 		mass_scale = 10.0,
 		mass_distribution = "u",
@@ -427,6 +429,7 @@ function love.draw()
 
 		lg.translate(rw * 0.5, rh * 0.5)
 		lg.scale(zoom, zoom)
+		lg.translate(-cx, -cy)
 		lg.setShader(render_shader)
 		
 		lg.setBlendMode("add", "alphamultiply")
@@ -464,10 +467,12 @@ function love.draw()
 		lg.setColor(1,1,1, 1.0 - (hint_timer / hint_time))
 		lg.printf("enbody", 0, 10, sw, "center")
 		for i,v in ipairs {
+			{"Q / ESC", "quit"},
+			{"ARROWS", "pan camera"},
+			{"I / O", "zoom in/out"},
+			{"S", "screenshot"},
 			{"E", "rebuild system"},
 			{"R", "new rules"},
-			{"Q", "quit"},
-			{"S", "screenshot"},
 		} do
 			local y = sh - (16 * i + 10)
 			lg.printf(v[1], 0, y, sw * 0.5 - 10, "right")
@@ -480,8 +485,8 @@ end
 
 --respond to input
 function love.keypressed(k)
+	--save a screenshot to png
 	if k == "s" then
-		--save a screenshot to png
 		love.graphics.captureScreenshot(function(id)
 			local f = io.open(string.format("%d.png", os.time()), "w")
 			if f then
@@ -490,8 +495,24 @@ function love.keypressed(k)
 				f:close()
 			end
 		end)
+	--pan
+	elseif k == "up" then
+		cy = cy - (8 / zoom)
+	elseif k == "down" then
+		cy = cy + (8 / zoom)
+	elseif k == "left" then
+		cx = cx - (8 / zoom)
+	elseif k == "right" then
+		cx = cx + (8 / zoom)
+	--zoom
+	elseif k == "i" then
+		zoom = zoom * 1.1
+	elseif k == "o" then
+		zoom = zoom / 1.1
+	--new setup
 	elseif k == "e" then
 		init_particles()
+	--new world
 	elseif k == "r" then
 		--restart, soft or hard
 		if love.keyboard.isDown("lctrl") then
@@ -499,11 +520,12 @@ function love.keypressed(k)
 		else
 			love.load()
 		end
+	--quit
 	elseif k == "q" or k == "escape" then
 		--quit out
 		love.event.quit()
+	--some other key? re-hint
 	else
-		--some other key? re-hint
 		hint_timer = 0
 	end
 end
