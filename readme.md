@@ -4,6 +4,8 @@ Enbody is a real-time multi-function n-body sim on the gpu in 500-odd lines of l
 
 It features multiple different attractor functions to generate lots of different visually interesting animations.
 
+Easy-to-run packaged builds are available on [itch.io](https://1bardesign.itch.io/enbody).
+
 # Explanation
 
 Storage:
