@@ -272,6 +272,39 @@ void effect() {
 #endif
 ]])
 
+--sharpen convolution to add faint outlines to particles
+local sharpen_shader = lg.newShader([[
+extern vec2 texture_size;
+extern float sharpen_amount;
+#ifdef PIXEL
+float conv[9] = float[9](
+	-1, -2, -1,
+	-2, 13, -2,
+	-1, -2, -1
+);
+vec4 effect( vec4 color, Image tex, vec2 uv, vec2 screen_coords ) {
+	vec4 pre = Texel(tex, uv);
+	vec4 c = vec4(0.0);
+	int i = 0;
+	float conv_sum = 0.0;
+	for (int y = -1; y <= 1; y++) {
+		for (int x = -1; x <= 1; x++) {
+			float conv_amount = conv[i++];
+			conv_sum += conv_amount;
+			vec2 o = vec2(x, y) / texture_size;
+			vec4 px = Texel(tex, uv + o);
+			c.rgb += px.rgb * conv_amount;
+			if (x == 0 && y == 0) {
+				c.a = px.a;
+			}
+		}
+	}
+	c.rgb /= conv_sum;
+	return mix(pre, c, sharpen_amount);
+}
+#endif
+]])
+
 --generate the mesh used to render the particles
 local points = {}
 for y = 1, dim do
@@ -423,8 +456,15 @@ end
 function love.draw()
 	--measure the render time we care about
 	draw_time = update_timer(draw_time, 0.99, function()
-		--draw current state into render canvas
+		--fade render canvas one step
+		lg.setBlendMode("alpha", "alphamultiply")
 		lg.setCanvas(render_cv)
+		local lum = 0.075
+		lg.setColor(lum, lum, lum, basic_fade_amount)
+		lg.rectangle("fill", 0, 0, rw, rh)
+		lg.setColor(1,1,1,1)
+
+		--draw current state into render canvas
 		lg.push()
 
 		lg.translate(rw * 0.5, rh * 0.5)
@@ -436,10 +476,12 @@ function love.draw()
 		render_mesh:setTexture(current_particles)
 		lg.draw(render_mesh)
 		lg.pop()
-		lg.setCanvas()
-		lg.setShader()
 
 		--draw render canvas as-is
+		lg.setCanvas()
+		lg.setShader(sharpen_shader)
+		sharpen_shader:send("texture_size", {render_cv:getDimensions()})
+		sharpen_shader:send("sharpen_amount", 0.025)
 		lg.setBlendMode("alpha", "premultiplied")
 		lg.setColor(1,1,1,1)
 		lg.draw(
@@ -448,13 +490,8 @@ function love.draw()
 			0,
 			downres, downres
 		)
-		--fade render canvas one step
+		lg.setShader()
 		lg.setBlendMode("alpha", "alphamultiply")
-		lg.setCanvas(render_cv)
-		lg.setColor(0,0,0, basic_fade_amount)
-		lg.rectangle("fill", 0, 0, rw, rh)
-		lg.setCanvas()
-		lg.setColor(1,1,1,1)
 	end)
 
 	--debug
