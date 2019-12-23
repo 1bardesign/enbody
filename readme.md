@@ -7,12 +7,15 @@ It features multiple different attractor functions to generate lots of different
 # Explanation
 
 Storage:
-- 2x texture buffer for particles
+
+- 2x 32 bit float texture buffer for particles (1 pixel = 1 particle, red/green channels = position, blue/alpha channels = velocity)
 - 1x mesh used as uv storage
-- 1x half resolution half float framebuffer
+- 1x half resolution 16 bit float framebuffer
+
+Procedure:
 
 - initialise the particles with a random walk
-- integrate with a pixel shader
+- update with a pixel shader
 	- sample all pixels in texture
 	- calculate force from each other body
 	- apply force to velocity
