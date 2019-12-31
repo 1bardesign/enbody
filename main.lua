@@ -456,6 +456,8 @@ end
 
 --update
 function love.update(dt)
+	--put an upper cap on dt so we don't get any absurd jumps
+	dt = math.min(dt, 1 / 60)
 	--measure the update time we care about
 	update_time = update_timer(update_time, 0.99, function()
 		local actual_dt = dt / steps_per_render
