@@ -7,7 +7,7 @@ lg.setDefaultFilter("nearest", "nearest")
 --dimension of the particles textures
 local dim = 64
 --time passes faster or slower
-local timescale = 0.5
+local timescale = 1.0
 --break update step into multiple updates
 local steps_per_render = 1
 --percentage of particles that exert force per-update
@@ -26,7 +26,7 @@ local sim_template = {
 	--distance scale forces act over
 	force_distance = 10.0,
 	--the term included in the shader inline; determines the "style" of force
-	force_term = "vec2 f = dir;",
+	force_term = "vec3 f = dir;",
 	--scale of masses present
 	--1 = all particles are same mass
 	--500 = particles mass between 1 and 500
@@ -40,15 +40,15 @@ local sim_configs = {
 		gen = "dense",
 		force_scale = 1.0,
 		force_distance = 10.0,
-		force_term = "vec2 f = dir * (m1 * m2) / max(1.0, r * r);",
+		force_term = "vec3 f = dir * (m1 * m2) / max(1.0, r * r);",
 		mass_scale = 1.0,
 		mass_distribution = "u * u",
 	},
 	strings = {
 		gen = "sparse",
-		force_scale = 0.0001,
+		force_scale = 0.00005,
 		force_distance = 20.0,
-		force_term = "vec2 f = dir * m2 * max(1.0, r * r);",
+		force_term = "vec3 f = dir * m2 * max(1.0, r * r);",
 		mass_scale = 5.0,
 		mass_distribution = "u",
 	},
@@ -56,7 +56,7 @@ local sim_configs = {
 		gen = "dense",
 		force_scale = 0.01,
 		force_distance = 10.0,
-		force_term = "vec2 f = dir * (r * m1 * 0.3 - 5.0);",
+		force_term = "vec3 f = dir * (r * m1 * 0.3 - 5.0);",
 		mass_scale = 2.0,
 		mass_distribution = "u",
 	},
@@ -64,7 +64,7 @@ local sim_configs = {
 		gen = "dense",
 		force_scale = 0.3,
 		force_distance = 10.0,
-		force_term = "vec2 f = dir / max(1.0, r);",
+		force_term = "vec3 f = dir / max(1.0, r);",
 		mass_scale = 2.0,
 		mass_distribution = "u",
 	},
@@ -72,7 +72,7 @@ local sim_configs = {
 		gen = "dense",
 		force_scale = 0.05,
 		force_distance = 5.0,
-		force_term = "vec2 f = dir * float(r > 2.0);",
+		force_term = "vec3 f = dir * float(r > 2.0);",
 		mass_scale = 2.0,
 		mass_distribution = "u",
 	},
@@ -80,7 +80,7 @@ local sim_configs = {
 		gen = "dense",
 		force_scale = 0.5,
 		force_distance = 15.0,
-		force_term = "vec2 f = dir * float(r < 2.0);",
+		force_term = "vec3 f = dir * float(r < 2.0);",
 		mass_scale = 10.0,
 		mass_distribution = "u",
 	},
@@ -88,7 +88,7 @@ local sim_configs = {
 		gen = "dense",
 		force_scale = 0.1,
 		force_distance = 40.0,
-		force_term = "vec2 f = dir * sin(r);",
+		force_term = "vec3 f = dir * sin(r);",
 		mass_scale = 10.0,
 		mass_distribution = "u",
 	},
@@ -96,7 +96,7 @@ local sim_configs = {
 		gen = "sparse",
 		force_scale = 0.05,
 		force_distance = 25.0,
-		force_term = "vec2 f = dir * m2 * -cos(r);",
+		force_term = "vec3 f = dir * m2 * -cos(r);",
 		mass_scale = 10.0,
 		mass_distribution = "u",
 	},
@@ -104,8 +104,28 @@ local sim_configs = {
 		gen = "sparse",
 		force_scale = 0.01,
 		force_distance = 5.0,
-		force_term = "vec2 f = dir * m2 + rotate(dir, 0.025 * m1 * 3.14159) * 0.5;",
+		force_term = "vec3 f = dir * m2 + vec3(rotate(dir.xy, 0.025 * m1 * 3.14159), dir.z) * 0.5;",
 		mass_scale = 5.0,
+		mass_distribution = "u",
+	},
+	center_avoid = {
+		gen = "sparse",
+		force_scale = 1.0,
+		force_distance = 1.0,
+		constant_term = "vec3 acc = -pos; acc = acc / (length(acc) * 0.1);",
+		force_term = "vec3 f = -(dir * m1 * m2 / (r * r)) * 10.0;",
+		mass_scale = 1.0,
+		mass_distribution = "u",
+	},
+	nebula = {
+		gen = "dense",
+		force_scale = 1.0,
+		force_distance = 2.0,
+		force_term = [[
+			float factor = min(mix(-m2, 1.0, r), 1.0) / max(0.1, r * r) * m1;
+			vec3 f = dir * factor;
+		]],
+		mass_scale = 30.0,
 		mass_distribution = "u",
 	},
 }
@@ -137,14 +157,31 @@ local downres = 2
 
 --format of the buffer textures
 local fmt_t = {format="rgba32f"}
---set up double buffer
-local current_particles = lg.newCanvas(dim, dim, fmt_t)
-local old_particles = lg.newCanvas(dim, dim, fmt_t)
+--set up separate buffers
+local particles = {
+	pos = lg.newCanvas(dim, dim, fmt_t),
+	vel = lg.newCanvas(dim, dim, fmt_t),
+	acc = lg.newCanvas(dim, dim, fmt_t),
+}
 
 --larger points = more chunky look
 --smaller = "higher fidelity"
 lg.setPointSize(1)
 
+--hide mouse since it's not used
+love.mouse.setVisible(false)
+
+
+local rotate_frag = [[
+vec2 rotate(vec2 v, float t) {
+	float s = sin(t);
+	float c = cos(t);
+	return vec2(
+		c * v.x - s * v.y,
+		s * v.x + c * v.y
+	);
+}
+]]
 
 local sim_types = {}
 local selected_sim = nil
@@ -153,7 +190,7 @@ function pick_sim()
 	selected_sim = sim_types[love.math.random(1, #sim_types)]
 end
 for k,v in pairs(sim_configs) do
-	local shader = lg.newShader([[
+	local accel_shader = lg.newShader([[
 	uniform Image MainTex;
 	const float timescale = ]]..timescale..[[;
 	const float force_scale = ]]..v.force_scale..[[;
@@ -169,30 +206,17 @@ for k,v in pairs(sim_configs) do
 		return mix(1.0, mass_scale, ]]..v.mass_distribution..[[);
 	}
 
-	vec2 rotate(vec2 v, float t) {
-		float s = sin(t);
-		float c = cos(t);
-		return vec2(
-			c * v.x - s * v.y,
-			s * v.x + c * v.y
-		);
-	}
+	]]..rotate_frag..[[
 
 	void effect() {
-		vec4 me = Texel(MainTex, VaryingTexCoord.xy);
-		float my_mass = mass(VaryingTexCoord.x);
 		//get our position
-		vec2 pos = me.xy;
-		vec2 vel = me.zw;
-
-		float dt_proper = dt * timescale;
+		vec3 pos = Texel(MainTex, VaryingTexCoord.xy).xyz;
+		float my_mass = mass(VaryingTexCoord.x);
 
 		float sample_accum = sampling_percent_offset;
 
-		float current_force_scale = (dt_proper * force_scale) / sampling_percent;
-		
-		//integrate
-		pos += vel * dt_proper;
+		float current_force_scale = force_scale / sampling_percent;
+		]]..(v.constant_term or "vec3 acc = vec3(0.0);")..[[
 
 		//iterate all particles
 		for (int y = 0; y < dim; y++) {
@@ -202,50 +226,67 @@ for k,v in pairs(sim_configs) do
 					sample_accum -= 1.0;
 
 					vec2 ouv = (vec2(x, y) + vec2(0.5, 0.5)) / float(dim);
-					vec4 other = Texel(MainTex, ouv);
+					vec3 other_pos = Texel(MainTex, ouv).xyz;
 					//define mass quantities
 					float m1 = my_mass;
 					float m2 = mass(ouv.x);
 					//get normalised direction and distance
-					vec2 dir = other.xy - pos;
+					vec3 dir = other_pos - pos;
 					float r = length(dir) / force_distance;
 					if (r > 0.0) {
 						dir = normalize(dir);
-						]]..v.force_term..[[
-						vel += (f / m1) * current_force_scale;
+						]]..(v.force_term or "vec3 f = dir;")..[[
+						acc += (f / m1) * current_force_scale;
 					}
 				}
 			}
 		}
-		//store
-		me.xy = pos;
-		me.zw = vel;
-		//apply force
-		love_PixelColor = me;
+		love_PixelColor = vec4(acc, 1.0);
 	}
 	#endif
 	]])
 	table.insert(sim_types, {
 		name = k,
-		integrate = shader,
+		accel_shader = accel_shader,
 		gen = v.gen,
 	})
 end
 
 local render_shader = lg.newShader([[
 uniform Image MainTex;
+uniform Image VelocityTex;
+uniform float CamRotation;
 const int dim = ]]..dim..[[;
+
+]]..rotate_frag..[[
+
 #ifdef VERTEX
 vec4 position(mat4 transform_projection, vec4 vertex_position)
 {
 	vec2 uv = vertex_position.xy;
-	vec4 sample = Texel(MainTex, uv);
-	vertex_position.xy = sample.rg;
+	vec3 pos = Texel(MainTex, uv).xyz;
+	vec3 vel = Texel(VelocityTex, uv).xyz;
+
+	//rotate with camera
+	pos.xz = rotate(pos.xz, CamRotation);
+
+	//perspective
+	float near = -500.0;
+	float far = 500.0;
+	float depth = (pos.z - near) / (far - near);
+	if (depth < 0.0) {
+		//clip
+		return vec4(0.0 / 0.0);
+	} else {
+		vertex_position.xy = pos.xy / mix(0.25, 2.0, depth);
+	}
+
 	//derive colour
-	float it = length(sample.zw) * 0.1;
+	float it = length(vel) * 0.1;
 	float clamped_it = clamp(it, 0.0, 1.0);
 
 	float i = (uv.x + uv.y * float(dim)) / float(dim);
+	i += length(pos) * 0.001;
 	i *= 3.14159 * 2.0;
 
 	VaryingColor.rgb = mix(
@@ -255,9 +296,9 @@ vec4 position(mat4 transform_projection, vec4 vertex_position)
 			(cos(i + 4.0) + 1.0) / 2.0
 		) * clamped_it,
 		vec3(1.0),
-		sqrt(it) * 0.05
+		sqrt(it) * 0.01
 	);
-	VaryingColor.a = it * 0.1;
+	VaryingColor.a = (it * 0.1) * (1.0 - depth);
 
 	//debug
 	//VaryingColor = vec4(1.0);
@@ -343,78 +384,65 @@ function init_particles()
 	local bigjump_chance = gen.bigjump_chance
 	local scatter_scale = gen.scatter_scale
 
-	local rd = love.image.newImageData(dim, dim, fmt_t.format)
-	--spawn with random walk
-	local _x, _y = 0, 0
-	local tx, ty = 0, 0
-	rd:mapPixel(function(x, y, r, g, b, a)
-		--random walk
-		_x = _x + love.math.randomNormal(walk_scale, 0)
-		_y = _y + love.math.randomNormal(walk_scale, 0)
+	local function copy_img_to_canvas(img, canvas)
+		lg.setCanvas(canvas)
+		lg.setBlendMode("replace", "premultiplied")
+		lg.draw(img)
+		lg.setBlendMode("alpha", "alphamultiply")
+		lg.setCanvas()
+	end
 
-		if love.math.random() < bigjump_chance then
-			_x = _x + love.math.randomNormal(bigjump_scale, 0)
-			_y = _y + love.math.randomNormal(bigjump_scale, 0)
+	--spawn particles with random walk
+	local pos_img = love.image.newImageData(dim, dim, fmt_t.format)
+	local _pos = {0, 0, 0}
+	local _total = {0, 0, 0}
+	pos_img:mapPixel(function(x, y, r, g, b, a)
+		--random walk
+		for i, v in ipairs(_pos) do
+			_pos[i] = v + love.math.randomNormal(walk_scale, 0)
 		end
 
-		r = _x + love.math.randomNormal(scatter_scale, 0)
-		g = _y + love.math.randomNormal(scatter_scale, 0)
-		b = 0
+		if love.math.random() < bigjump_chance then
+			for i, v in ipairs(_pos) do
+				_pos[i] = v + love.math.randomNormal(bigjump_scale, 0)
+			end
+		end
+
+		r = _pos[1] + love.math.randomNormal(scatter_scale, 0)
+		g = _pos[2] + love.math.randomNormal(scatter_scale, 0)
+		b = _pos[3] + love.math.randomNormal(scatter_scale, 0)
 		a = 1
 
 		--note down for later
-		tx = tx + r
-		ty = ty + g
+		_total[1] = _total[1] + r
+		_total[2] = _total[2] + g
+		_total[3] = _total[3] + b
 
 		return r, g, b, a
 	end)
 
 	--apply mean offset
-	tx = tx / (dim * dim)
-	ty = ty / (dim * dim)
-	rd:mapPixel(function(x, y, r, g, b, a)
-		r = r - tx
-		g = g - ty
+	for i,v in ipairs(_total) do
+		_total[i] = v / (dim * dim)
+	end
+	pos_img:mapPixel(function(x, y, r, g, b, a)
+		r = r - _total[1]
+		g = g - _total[2]
+		b = b - _total[3]
 		return r, g, b, a
 	end)
 
-	--reset the velocities - we'd do this at generation time but love uses premultiplied colours for imagedata...
-	local reset_vel_shader = lg.newShader([[
-	uniform Image MainTex;
-	const float init_vel_scale = ]]..init_vel_scale..[[;
-	#ifdef PIXEL
-	vec2 hash2(vec2 i) {
-		i = vec2(
-			dot(i, vec2(157.8, 251.9)),
-			dot(i, vec2(-31.6, 97.13))
-		);
-		return fract(sin(i) * 43758.5453) * 2.0 - 1.0;
-	}
-	void effect() {
-		vec2 n = hash2(
-			VaryingTexCoord.xy
-		) * init_vel_scale;
-		love_PixelColor = vec4(
-			Texel(MainTex, VaryingTexCoord.xy).xy,
-			n
-		);
-	}
-	#endif
-	]])
+	copy_img_to_canvas(lg.newImage(pos_img), particles.pos)
 
-	rd = lg.newImage(rd)
-	for i,v in ipairs({
-		current_particles,
-		old_particles,
-	}) do
-		lg.setCanvas(v)
-		lg.setShader(reset_vel_shader)
-		lg.setBlendMode("replace", "premultiplied")
-		lg.draw(rd)
-		lg.setBlendMode("alpha", "alphamultiply")
-		lg.setShader()
-		lg.setCanvas()
-	end
+	--zero out acc, vel
+	lg.setCanvas(particles.vel)
+	lg.clear(0,0,0,1)
+	lg.setCanvas(particles.acc)
+	lg.clear(0,0,0,1)
+
+	--reset canvas
+	lg.setCanvas()
+
 end
 
 --timing for the visual hints
@@ -430,25 +458,64 @@ end
 function love.update(dt)
 	--measure the update time we care about
 	update_time = update_timer(update_time, 0.99, function()
-		for i = 1, steps_per_render do
-			--swap double buffer
-			current_particles, old_particles = old_particles, current_particles
-			--render next state
-			lg.setBlendMode("replace", "premultiplied")
-			local integrate_shader = selected_sim.integrate
-			lg.setShader(integrate_shader)
-			integrate_shader:send("dt", dt / steps_per_render)
-			integrate_shader:send("sampling_percent", sampling_percent)
-			integrate_shader:send("sampling_percent_offset", love.math.random())
+		local actual_dt = dt / steps_per_render
+		local accel_shader = selected_sim.accel_shader
+		accel_shader:send("sampling_percent", sampling_percent)
 
-			lg.setCanvas(current_particles)
-			lg.draw(old_particles)
+		for i = 1, steps_per_render do
+			--render next state
+			lg.setShader(accel_shader)
+			accel_shader:send("sampling_percent_offset", love.math.random())
+
+			lg.setBlendMode("replace", "premultiplied")
+			lg.setColor(1,1,1,1)
+			lg.setCanvas(particles.acc)
+			lg.draw(particles.pos)
+
+			--
+			lg.setShader()
+			lg.setBlendMode("add", "alphamultiply")
+			lg.setColor(1,1,1,actual_dt)
+			--integrate vel
+			lg.setCanvas(particles.vel)
+			lg.draw(particles.acc)
+			--integrate pos
+			lg.setCanvas(particles.pos)
+			lg.draw(particles.vel)
 		end
+		lg.setColor(1,1,1,1)
 	end)
 	lg.setCanvas()
 	lg.setBlendMode("alpha", "alphamultiply")
 	lg.setShader()
 
+
+	--pan
+	local pan_amount = (50 / zoom) * dt
+	if love.keyboard.isDown("up") then
+		cy = cy - pan_amount
+	end
+	if love.keyboard.isDown("down") then
+		cy = cy + pan_amount
+	end
+	--rotate
+	local rotate_amount = math.pi * 0.5 * dt
+	if love.keyboard.isDown("left") then
+		cx = cx - rotate_amount
+	end
+	if love.keyboard.isDown("right") then
+		cx = cx + rotate_amount
+	end
+
+	--zoom
+	if love.keyboard.isDown("i") then
+		zoom = zoom * 1.01
+	end
+	if love.keyboard.isDown("o") then
+		zoom = zoom / 1.01
+	end
+
+	--update hint timer
 	hint_timer = hint_timer + dt
 end
 
@@ -469,11 +536,13 @@ function love.draw()
 
 		lg.translate(rw * 0.5, rh * 0.5)
 		lg.scale(zoom, zoom)
-		lg.translate(-cx, -cy)
+		lg.translate(0, -cy)
 		lg.setShader(render_shader)
+		if render_shader:hasUniform("CamRotation") then render_shader:send("CamRotation", cx) end
+		if render_shader:hasUniform("VelocityTex") then render_shader:send("VelocityTex", particles.vel) end
 		
 		lg.setBlendMode("add", "alphamultiply")
-		render_mesh:setTexture(current_particles)
+		render_mesh:setTexture(particles.pos)
 		lg.draw(render_mesh)
 		lg.pop()
 
@@ -497,6 +566,18 @@ function love.draw()
 	--debug
 	if love.keyboard.isDown("`") then
 		lg.print(string.format("%s\nfps: %4d\nupdate: %02.2fms\ndraw:  %02.2fms", selected_sim.name, love.timer.getFPS(), update_time * 1e3, draw_time * 1e3), 10, 10)
+
+		lg.push()
+		lg.translate(200, 10)
+		for i,v in ipairs({
+			particles.pos,
+			particles.vel,
+			particles.acc,
+		}) do
+			lg.translate(0, v:getHeight())
+			lg.draw(v)
+		end
+		lg.pop()
 	end
 
 	--draw hints if recently pressed or on boot
@@ -532,20 +613,6 @@ function love.keypressed(k)
 				f:close()
 			end
 		end)
-	--pan
-	elseif k == "up" then
-		cy = cy - (8 / zoom)
-	elseif k == "down" then
-		cy = cy + (8 / zoom)
-	elseif k == "left" then
-		cx = cx - (8 / zoom)
-	elseif k == "right" then
-		cx = cx + (8 / zoom)
-	--zoom
-	elseif k == "i" then
-		zoom = zoom * 1.1
-	elseif k == "o" then
-		zoom = zoom / 1.1
 	--new setup
 	elseif k == "e" then
 		init_particles()
@@ -562,7 +629,16 @@ function love.keypressed(k)
 		--quit out
 		love.event.quit()
 	--some other key? re-hint
-	else
+	elseif
+		--not arrow key
+		k ~= "up"
+		and k ~= "down"
+		and k ~= "left"
+		and k ~= "right"
+		--not i/o
+		and k ~= "i"
+		and k ~= "o"
+	then
 		hint_timer = 0
 	end
 end
