@@ -7,7 +7,7 @@ lg.setDefaultFilter("nearest", "nearest")
 --dimension of the particles textures
 local dim = 64
 --time passes faster or slower
-local timescale = 0.5
+local timescale = 1.0
 --break update step into multiple updates
 local steps_per_render = 1
 --percentage of particles that exert force per-update
@@ -108,6 +108,26 @@ local sim_configs = {
 		mass_scale = 5.0,
 		mass_distribution = "u",
 	},
+	center_avoid = {
+		gen = "sparse",
+		force_scale = 1.0,
+		force_distance = 1.0,
+		constant_term = "vec3 acc = -pos; acc = acc / (length(acc) * 0.1);",
+		force_term = "vec3 f = -(dir * m1 * m2 / (r * r)) * 10.0;",
+		mass_scale = 1.0,
+		mass_distribution = "u",
+	},
+	nebula = {
+		gen = "dense",
+		force_scale = 1.0,
+		force_distance = 2.0,
+		force_term = [[
+			float factor = min(mix(-m2, 1.0, r), 1.0) / max(0.1, r * r) * m1;
+			vec3 f = dir * factor;
+		]],
+		mass_scale = 30.0,
+		mass_distribution = "u",
+	},
 }
 
 --parameters of worldgen
@@ -147,6 +167,10 @@ local particles = {
 --larger points = more chunky look
 --smaller = "higher fidelity"
 lg.setPointSize(1)
+
+--hide mouse since it's not used
+love.mouse.setVisible(false)
+
 
 local rotate_frag = [[
 vec2 rotate(vec2 v, float t) {
@@ -192,7 +216,7 @@ for k,v in pairs(sim_configs) do
 		float sample_accum = sampling_percent_offset;
 
 		float current_force_scale = force_scale / sampling_percent;
-		vec3 acc = vec3(0.0);
+		]]..(v.constant_term or "vec3 acc = vec3(0.0);")..[[
 
 		//iterate all particles
 		for (int y = 0; y < dim; y++) {
@@ -211,7 +235,7 @@ for k,v in pairs(sim_configs) do
 					float r = length(dir) / force_distance;
 					if (r > 0.0) {
 						dir = normalize(dir);
-						]]..v.force_term..[[
+						]]..(v.force_term or "vec3 f = dir;")..[[
 						acc += (f / m1) * current_force_scale;
 					}
 				}
@@ -246,18 +270,23 @@ vec4 position(mat4 transform_projection, vec4 vertex_position)
 	//rotate with camera
 	pos.xz = rotate(pos.xz, CamRotation);
 
-	float z_fac = pos.z * 0.01;
-
-	float d = max(0.01, 1.0 + z_fac * 0.1);
-	
-	vertex_position.xy = pos.xy / d;
+	//perspective
+	float near = -500.0;
+	float far = 500.0;
+	float depth = (pos.z - near) / (far - near);
+	if (depth < 0.0) {
+		//clip
+		return vec4(0.0 / 0.0);
+	} else {
+		vertex_position.xy = pos.xy / mix(0.25, 2.0, depth);
+	}
 
 	//derive colour
 	float it = length(vel) * 0.1;
 	float clamped_it = clamp(it, 0.0, 1.0);
 
 	float i = (uv.x + uv.y * float(dim)) / float(dim);
-	i += z_fac;
+	i += length(pos) * 0.001;
 	i *= 3.14159 * 2.0;
 
 	VaryingColor.rgb = mix(
@@ -269,7 +298,7 @@ vec4 position(mat4 transform_projection, vec4 vertex_position)
 		vec3(1.0),
 		sqrt(it) * 0.01
 	);
-	VaryingColor.a = (it * 0.1);
+	VaryingColor.a = (it * 0.1) * (1.0 - depth);
 
 	//debug
 	//VaryingColor = vec4(1.0);
@@ -509,8 +538,8 @@ function love.draw()
 		lg.scale(zoom, zoom)
 		lg.translate(0, -cy)
 		lg.setShader(render_shader)
-		render_shader:send("CamRotation", cx)
-		render_shader:send("VelocityTex", particles.vel)
+		if render_shader:hasUniform("CamRotation") then render_shader:send("CamRotation", cx) end
+		if render_shader:hasUniform("VelocityTex") then render_shader:send("VelocityTex", particles.vel) end
 		
 		lg.setBlendMode("add", "alphamultiply")
 		render_mesh:setTexture(particles.pos)
